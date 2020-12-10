@@ -52,7 +52,26 @@ class FieldInfo:
         "regex",
         "check_name",
         "alias",
+        "original_name",
     )
+
+    def __get__(self, obj, t=None):
+        print("Field __get__")
+        print(self)
+        print(f"Field orig={self.original_name}, alias={self.alias}")
+        print(obj)
+        print(t)
+        print()
+        if self.alias:
+            return self.alias
+        else:
+            return self.original_name
+        # return self.original_name if
+
+    def __set_name__(self, cls, name):
+        # print(f"Field set name {name}")
+        # print(f"{cls}")
+        self.original_name = name
 
     def __init__(
         self,

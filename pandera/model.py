@@ -24,6 +24,7 @@ from .model_components import (
     CHECK_KEY,
     DATAFRAME_CHECK_KEY,
     CheckInfo,
+    Field,
     FieldCheckInfo,
     FieldInfo,
 )
@@ -88,6 +89,59 @@ class SchemaModel:
 
     def __new__(cls, *args, **kwargs):
         raise TypeError(f"{cls.__name__} may not be instantiated.")
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(
+            **kwargs
+        )  # TODO: bug? Förstör denna subclass beteende?
+
+        # TODO: creeate schema here already (side effecty cls assignments??)
+        annotations = cls._collect_field_annotations_init_sublcass()
+        fields = cls._collect_fields_init_subclass(annotations)
+        check_infos = cast(
+            List[FieldCheckInfo], cls._collect_check_infos(CHECK_KEY)
+        )
+        # checks = cls._extract_checks(
+        #     check_infos, field_names=list(fields.keys())
+        # )
+
+        # df_check_infos = cls._collect_check_infos(DATAFRAME_CHECK_KEY)
+        # cls.__dataframe_checks__ = cls._extract_df_checks(df_check_infos)
+
+        config = cls._collect_config()
+        mi_kwargs = {
+            name[len("multiindex_") :]: value
+            for name, value in vars(config).items()
+            if name.startswith("multiindex_")
+        }
+        # columns, index = cls._build_columns_index(
+        # fields, checks, **mi_kwargs
+        # )
+        # print(f"Created {cls}")
+        # print("anno")
+        # print(annotations)
+        # print("fields")
+        # print(fields)
+
+        # TODO: if field is none, create one
+        for fn, (_, f) in fields.items():
+            if f is None:
+                # Verkar kunna vara None, trots att det finns en field redan på en subclass...
+                # Red ut detta hur den försvann...
+                # TODO:
+                print("add field")
+                print(fn)
+                print(cls)
+                print("done add field")
+                add_field = Field()
+                add_field.__set_name__(cls, fn)
+                setattr(cls, fn, add_field)
+
+        # print("cols")
+        # print(columns)
+        # print("index")
+        # print(index)
+        # print("Done class")
 
     @classmethod
     def to_schema(cls) -> DataFrameSchema:
@@ -161,6 +215,9 @@ class SchemaModel:
         columns: Dict[str, schema_components.Column] = {}
         indices: List[schema_components.Index] = []
         for field_name, (annotation, field) in fields.items():
+            print(f"field_name={field_name}")
+            print(f"annotation={annotation}")
+            print(f"field={field}")
             field_checks = checks.get(field_name, [])
             field_name = getattr(field, "alias", None) or field_name
             check_name = getattr(field, "check_name", None)
@@ -223,18 +280,74 @@ class SchemaModel:
         }
 
     @classmethod
+    def _collect_field_annotations_init_sublcass(
+        cls,
+    ) -> Dict[str, AnnotationInfo]:
+        """Collect inherited field annotations from bases."""
+        bases = inspect.getmro(cls)[:-2]  # bases -> SchemaModel -> object
+        bases = cast(Tuple[Type[SchemaModel]], bases)
+        raw_annotations = {}
+        for base in reversed(bases):
+            base_annotations = _get_field_annotations_init_subclass(base)
+            raw_annotations.update(base_annotations)
+        return {
+            name: AnnotationInfo(annotation)
+            for name, annotation in raw_annotations.items()
+        }
+
+    @classmethod
     def _collect_fields(
         cls, annotations: Dict[str, AnnotationInfo]
     ) -> Dict[str, Tuple[AnnotationInfo, Optional[FieldInfo]]]:
         """Centralize publicly named fields and their corresponding annotations."""
         fields = {}
+        _NOT_FOUND = object()
         for field_name, annotation in annotations.items():
-            field: Optional[FieldInfo] = getattr(cls, field_name, None)
+            # field: Optional[FieldInfo] = getattr(cls, field_name, None)
+            # field: Optional[FieldInfo] = cls.__dict__.get(field_name, None)  # TODO: denna måste justeras också!
+            # TODO: insert mro loop here
+            field: Optional[FieldInfo] = None
+            # field: Optional[FieldInfo] = cls.__dict__.get(field_name, None)  # TODO: bug, denna söker inte i subclasses...
+            bases = inspect.getmro(cls)[:-1]
+            for b in bases:
+                candidate = b.__dict__.get(field_name, _NOT_FOUND)
+                if candidate is not _NOT_FOUND:
+                    field = candidate
+                    break
+
             if field is not None and not isinstance(field, FieldInfo):
                 raise SchemaInitError(
                     f"'{field_name}' can only be assigned a 'Field', "
                     + f"not a '{type(field)}.'"
                 )
+            field_name = getattr(field, "alias", None) or field_name
+            fields[field_name] = (annotation, field)
+        return fields
+
+    @classmethod
+    def _collect_fields_init_subclass(
+        cls, annotations: Dict[str, AnnotationInfo]
+    ) -> Dict[str, Tuple[AnnotationInfo, Optional[FieldInfo]]]:
+        """Centralize publicly named fields and their corresponding annotations."""
+        fields = {}
+        _NOT_FOUND = object()
+        for field_name, annotation in annotations.items():
+            # TODO: fixa dubblering
+            # field: Optional[FieldInfo] = getattr(cls, field_name, None)  # TODO: Kan man få denna att fungera bra med descriptorn? Det borde kunna gå att få till med att kolla på classen
+            field: Optional[FieldInfo] = None
+            # field: Optional[FieldInfo] = cls.__dict__.get(field_name, None)  # TODO: bug, denna söker inte i subclasses...
+            bases = inspect.getmro(cls)[:-1]
+            for b in bases:
+                candidate = b.__dict__.get(field_name, _NOT_FOUND)
+                if candidate is not _NOT_FOUND:
+                    field = candidate
+                    break
+
+            # if field is not None and not isinstance(field, FieldInfo):
+            #     raise SchemaInitError(
+            #         f"'{field_name}' can only be assigned a 'Field', "
+            #         + f"not a '{type(field)}.'"
+            #     )
             field_name = getattr(field, "alias", None) or field_name
             fields[field_name] = (annotation, field)
         return fields
@@ -320,6 +433,27 @@ def _get_field_annotations(model: Type[SchemaModel]) -> Dict[str, Any]:
 
     if missing:
         raise SchemaInitError(f"Found missing annotations: {missing}")
+
+    return annotations
+
+
+def _get_field_annotations_init_subclass(
+    model: Type[SchemaModel],
+) -> Dict[str, Any]:
+    annotations = get_type_hints(model)
+
+    def _not_routine(member: Any) -> bool:
+        return not inspect.isroutine(member)
+
+    missing = []
+    for name, _ in inspect.getmembers(model, _not_routine):
+        if name.startswith("_") or name == _CONFIG_KEY:
+            annotations.pop(name, None)
+        elif name not in annotations:
+            missing.append(name)
+
+    # if missing:
+    #     raise SchemaInitError(f"Found missing annotations: {missing}")
 
     return annotations
 

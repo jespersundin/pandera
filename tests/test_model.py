@@ -551,6 +551,8 @@ def test_inherit_alias():
         a: Series[int] = pa.Field(alias="_a")
         b: Series[int] = pa.Field(alias="_b")
 
+    # TODO: more specific test, to show that the correct field instance is used
+    # TODO: add that test before changes to see if it was true earlier also IMPORTANT
     class Child(Base):
         a: Series[int] = pa.Field(alias="_a_child")
 
@@ -558,3 +560,18 @@ def test_inherit_alias():
     assert len(schema.columns) == 2
     assert schema.columns.get("_a_child", None) is not None
     assert schema.columns.get("_b", None) is not None
+
+
+def test_access_column_name() -> None:
+    """Test that you are able to access the column name as a string from the class"""
+
+    class Schema(pa.SchemaModel):
+        a: Series[int]
+        b: Series[str] = pa.Field()
+        c: Series[str] = pa.Field(alias="_cc")
+        idx: Index[str]
+
+    assert Schema.a == "a"
+    assert Schema.b == "b"
+    assert Schema.c == "_cc"
+    assert Schema.idx == "idx"
